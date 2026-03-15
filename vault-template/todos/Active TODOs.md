@@ -8,5 +8,3 @@ created: {{date}}
 ## In Progress
 
 ## Pending
-
-## Completed

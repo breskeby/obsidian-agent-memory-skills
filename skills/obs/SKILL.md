@@ -450,9 +450,10 @@ Write a session summary note and update TODOs.
    - **Next Steps**: What should happen next (checkboxes)
 
 5. **Update TODOs**: Edit `$VAULT/todos/Active TODOs.md`:
-   - Move completed items to Completed section
+   - Remove completed `[x]` items from Active TODOs — append them to `$VAULT/todos/Completed TODOs Archive.md` under a dated `## $PROJECT (YYYY-MM-DD)` heading (create the file if it doesn't exist)
    - Add new items discovered during the session
    - Keep items grouped by project
+   - **Never leave `[x]` items in Active TODOs** — they accumulate over time and waste context window on every session start
 
 6. **Update Session Log**: Add an entry to `$VAULT/sessions/Session Log.md` with the date, project, branch, and a one-line summary.
 
@@ -571,10 +572,10 @@ View and update the Active TODOs for the current project.
 
 3. **If arguments provided**: Parse as a TODO action:
    - Plain text → Add as a new pending item under `$PROJECT`
-   - `done: <text>` → Move matching item to Completed
+   - `done: <text>` → Mark item done: remove from Active TODOs, append to `$VAULT/todos/Completed TODOs Archive.md` under a dated `## $PROJECT (YYYY-MM-DD)` heading (create the file if it doesn't exist)
    - `remove: <text>` → Remove matching item
 
-4. **Write back** the updated file.
+4. **Write back** Active TODOs (and archive file if items were completed).
 
 ### `lookup` — Search the Vault
 
