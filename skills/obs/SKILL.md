@@ -1,6 +1,6 @@
 ---
 name: obs-memory
-description: "Persistent Obsidian-based memory for coding agents. Use at session start to orient from a knowledge vault, during work to look up architecture/component/pattern notes, and when discoveries are made to write them back. Activate when the user mentions obsidian memory, obsidian vault, obsidian notes, or /obs commands. Provides commands: init, analyze, recap, project, note, todo, lookup, relate."
+description: "Persistent Obsidian-based memory for coding agents. Use at session start to orient from a knowledge vault, during work to look up architecture/component/pattern/spec/plan notes, and when discoveries are made to write them back. Activate when the user mentions obsidian memory, obsidian vault, obsidian notes, or /obs commands. Provides commands: init, analyze, recap, project, note, spec, plan, todo, lookup, relate."
 metadata:
   author: adamtylerlynch
   version: "2.2"
@@ -141,6 +141,8 @@ Write concisely. Notes are for your future context, not human documentation. Pre
 | Knowledge type | Location | Example |
 |---|---|---|
 | One project only | `projects/{name}/` | How this API handles auth |
+| Stable design (the *what*) | `projects/{name}/specs/` | "Multi-tenant billing" spec |
+| Initiative impl plan (the *how*) | `projects/{name}/plans/` | "add-stripe-integration" plan for current branch or push |
 | Shared across projects | `domains/{tech}/` | How Go interfaces work |
 | Universal, tech-agnostic | `patterns/` | SOLID principles |
 | Session summaries | `sessions/` | What was done and discovered |
@@ -321,6 +323,14 @@ Using the discovered content, synthesize:
 
 **Notes to write:**
 
+Also scaffold the spec/plan folders during `analyze` and `project`:
+- `$VAULT/projects/{name}/specs/` (with a `.gitkeep`)
+- `$VAULT/projects/{name}/plans/` (with a `.gitkeep`)
+
+During `analyze`, also detect existing spec/plan-like documents in the repo and import them:
+- Files matching `docs/specs/*.md`, `specs/*.md`, `design/*.md`, `rfcs/*.md` → import as specs
+- Files matching `docs/plans/*.md`, `plans/*.md`, `PLAN.md` → import as plans (best-effort; prompt the user before mass import if >5 files)
+
 1. **Project overview** (`$VAULT/projects/{name}/{name}.md`) — Fully populated:
    ```yaml
    ---
@@ -483,6 +493,8 @@ Scaffold a new project in the vault. Uses the first argument as the project name
    - `$VAULT/projects/{name}/architecture/`
    - `$VAULT/projects/{name}/components/`
    - `$VAULT/projects/{name}/patterns/`
+   - `$VAULT/projects/{name}/specs/`
+   - `$VAULT/projects/{name}/plans/`
 
 4. **Create project overview** at `$VAULT/projects/{name}/{name}.md`:
    ```yaml
@@ -511,9 +523,11 @@ Scaffold a new project in the vault. Uses the first argument as the project name
 
 ### `note` — Create a Note from Template
 
-Create a note using a template. The first argument specifies the type: `component`, `adr`, or `pattern`.
+Create a note using a template. The first argument specifies the type: `component`, `adr`, `pattern`, `spec`, or `plan`.
 
-**Usage**: `note <component|adr|pattern> [name]`
+**Usage**: `note <component|adr|pattern|spec|plan> [name]`
+
+For specs and plans, prefer the dedicated `spec` and `plan` top-level commands below — they handle branch detection, status updates, and spec↔plan linking.
 
 #### `note component [name]`
 
@@ -564,6 +578,156 @@ created: {YYYY-MM-DD}
 Sections: Pattern, When to Use, Implementation, Examples
 
 After creating any note, add a wikilink to it from the project overview.
+
+### `spec` — Manage Design Specs
+
+Specs describe **what** to build and **why**. They are stable, branch-independent, and outlive any single implementation attempt. One spec typically maps to many plans over time.
+
+**Usage**: `spec [action] [args]`
+
+#### `spec new [title]`
+
+Create a new spec at `$VAULT/projects/$PROJECT/specs/{title}.md` using the `Spec` template.
+
+1. If no title argument, ask the user.
+2. Resolve target path. If it already exists, show it instead of overwriting.
+3. CLI-first creation:
+   ```bash
+   obsidian vault=$VAULT_NAME create path="projects/$PROJECT/specs/{title}" template="Spec" silent
+   obsidian vault=$VAULT_NAME property:set path="projects/$PROJECT/specs/{title}" name="project" value="[[projects/$PROJECT/$PROJECT]]" type="text"
+   ```
+   Fallback: write the file directly from the template at `vault-template/templates/Spec.md`.
+4. Add a wikilink under the `## Specs` section of the project overview.
+5. Report the path and remind the user to fill in Problem, Goals, Proposed Design.
+
+#### `spec list`
+
+List active specs for the current project.
+
+```bash
+obsidian vault=$VAULT_NAME search query="type: spec" path="projects/$PROJECT/specs"
+```
+Fallback: list files under `$VAULT/projects/$PROJECT/specs/` and read frontmatter (first ~10 lines) for `status`.
+
+#### `spec status <title> <draft|accepted|implemented|superseded>`
+
+Update a spec's status.
+
+```bash
+obsidian vault=$VAULT_NAME property:set file="<title>" name="status" value="<new-status>" type="text"
+```
+
+#### `spec link <spec-title> <plan-title>`
+
+Link a spec to a plan bidirectionally.
+
+1. Append `[[projects/$PROJECT/plans/<plan-title>]]` to the spec's `related-plans` list.
+2. Set the plan's `spec` property to `[[projects/$PROJECT/specs/<spec-title>]]`.
+
+Use the read-then-set pattern from `relate` to avoid clobbering.
+
+### `plan` — Manage Implementation Plans
+
+Plans are the **how** — the executable implementation strategy for an *initiative*. An initiative is whatever the user is focused on right now: typically a git branch, but it can also be a feature push on `main`, a spike, or a focused session. One plan per initiative. Plans accumulate refinements across sessions (mirror the bear-plan extension model) and are archived when the work ships or is dropped.
+
+**Usage**: `plan [action] [args]`
+
+#### Scope detection
+
+Plans use a single `scope` identifier (not separate branch + commit). Resolve it in this order:
+
+1. Current git branch: `git branch --show-current` — use as-is.
+2. If detached HEAD or no git repo: ask the user for a short slug (e.g. `multi-tenant-billing`).
+
+Plan file naming: `{scope} — {short-title}.md` where `scope` has `/` replaced by `-`. One plan per scope by default.
+
+#### Single-file invariant
+
+**One plan per scope. Ever.** Refining a plan must update the original file in place — never create a copy, a v2, a new dated file, or a renamed sibling. This mirrors the bear-plan extension's "one Bear note per (repo, branch)" rule and is what makes plans persist usefully across sessions.
+
+Concretely:
+- Before creating any plan file, search for an existing one by `scope:` frontmatter. If found → hand off to `plan refine`. Do not create.
+- The plan's filename (`{scope} — {title}.md`) is set once at creation and never changed, even if the human title in the body evolves. The `scope` identifier is the stable key.
+- Even if the user's branch is renamed or rebased, keep editing the existing plan file. Update the `scope` frontmatter if the branch was truly renamed; do not fork.
+
+#### `plan new [title]`
+
+Create a new plan for the current initiative — only if one does not already exist for this scope.
+
+1. Resolve scope (see above).
+2. **Existence check (mandatory).** Search by `scope:` frontmatter property:
+   ```bash
+   obsidian vault=$VAULT_NAME search query="scope: {scope}" path="projects/$PROJECT/plans"
+   ```
+   Fallback: grep `$VAULT/projects/$PROJECT/plans/` for `scope: {scope}`.
+   - If a match exists → **do not create**. Print the path and invoke `plan refine` instead.
+3. If no title argument, derive one from the scope or ask the user.
+4. CLI-first creation at `$VAULT/projects/$PROJECT/plans/{scope} — {title}.md`:
+   ```bash
+   obsidian vault=$VAULT_NAME create path="projects/$PROJECT/plans/{scope} — {title}" template="Plan" silent
+   obsidian vault=$VAULT_NAME property:set path="projects/$PROJECT/plans/{scope} — {title}" name="project" value="[[projects/$PROJECT/$PROJECT]]" type="text"
+   obsidian vault=$VAULT_NAME property:set path="projects/$PROJECT/plans/{scope} — {title}" name="scope" value="{scope}" type="text"
+   ```
+   Fallback: write directly from `vault-template/templates/Plan.md` with placeholders substituted.
+5. Add a wikilink under the `## Plans` section of the project overview.
+6. If the user mentions a related spec, run `spec link` to bind them.
+
+#### `plan current`
+
+Resolve the plan for the current initiative. CLI-first:
+```bash
+obsidian vault=$VAULT_NAME search query="scope: {current-scope}" path="projects/$PROJECT/plans"
+```
+Fallback: grep `$VAULT/projects/$PROJECT/plans/` for `scope: {current-scope}` in frontmatter.
+
+If zero matches → offer to run `plan new`.
+If one match → read and display it.
+If multiple → list them; prefer the one with `status: active`.
+
+#### `plan list [status]`
+
+List plans for the current project, optionally filtered by status (`active`, `completed`, `abandoned`).
+
+```bash
+obsidian vault=$VAULT_NAME search query="type: plan" path="projects/$PROJECT/plans"
+```
+
+#### `plan refine [note]`
+
+Update the existing plan for the current scope **in place**. This is the default verb for any ongoing planning work — it never creates a new file.
+
+1. Resolve the current plan via `plan current`. If none exists, offer `plan new` and stop.
+2. Update the plan body directly. Two complementary update modes:
+   - **Steps mutation** — when the work shape itself changes (steps added, removed, reordered, marked done): edit the `## Steps` checklist directly in the existing file. Check off completed items as `[x]`, add new items, remove obsolete ones. Use the obsidian CLI `read` + targeted edits, or the `edit` tool with exact-text replacement on the markdown file path. Do not duplicate the steps section.
+   - **Refinement log entry** — when the *reasoning* changes (a decision was made, a constraint emerged, scope shifted): append a dated section under `## Refinement Log`:
+     ```bash
+     obsidian vault=$VAULT_NAME append path="projects/$PROJECT/plans/{...}" content="\n### {YYYY-MM-DD HH:mm} — refinement\n\n{note}"
+     ```
+3. Discoveries and decisions made while executing the plan go under `## Discoveries` and `## Decisions Made` of the same file — append, do not branch off into a new note. Promote items to a Component note, Spec edit, or ADR only when they outgrow the plan.
+
+**Never** in `plan refine`:
+- Create a new file in `plans/`.
+- Rename the existing plan file (even if the human title in `# {{title}}` is updated).
+- Duplicate the steps section with a "v2" or "updated" heading.
+
+#### `plan complete [title]`
+
+Mark the current (or named) plan as completed.
+
+1. Set `status: completed` on the plan.
+2. Append a final "Outcome" section summarizing what shipped.
+3. Move completed `[x]` TODO items for this project to the archive (same as `recap`).
+4. If the plan was linked to a spec, optionally set the spec's `status: implemented`.
+
+#### `plan abandon [title]`
+
+Mark the plan as `status: abandoned`. Useful when a branch is dropped without merging. Append a short note explaining why — future sessions on similar problems should be able to learn from the abandonment.
+
+#### Auto-behaviors for plans
+
+- **On session start**, after orienting from the project overview, also run `plan current` silently. If an active plan exists for the current scope, surface it as part of orientation so the agent knows the in-flight strategy.
+- **On significant turns** (e.g. when the agent produces something that detects as a plan — a heading like `## Plan` followed by numbered steps), offer to run `plan refine` to capture the refinement in the existing plan file. Don't auto-write; ask first. Never offer `plan new` if `plan current` resolved a file — always refine.
+- **On branch switch** detected mid-session (via `git branch --show-current` changing), re-resolve `plan current` for the new scope.
 
 ### `todo` — Manage TODOs
 
@@ -795,8 +959,10 @@ $VAULT/
 ├── Home.md                           # Dashboard (read only if lost)
 ├── projects/{name}/
 │   ├── {name}.md                     # Project overview — START HERE
-│   ├── architecture/                 # ADRs and design decisions
+│   ├── architecture/                 # ADRs (accepted design decisions)
 │   ├── components/                   # Per-component notes
+│   ├── specs/                        # Stable design docs — the WHAT
+│   ├── plans/                        # Initiative-scoped impl plans — the HOW
 │   └── patterns/                     # Project-specific patterns
 ├── domains/{tech}/                   # Cross-project knowledge
 ├── patterns/                         # Universal patterns
@@ -805,3 +971,18 @@ $VAULT/
 ├── templates/                        # Note templates
 └── inbox/                            # Unsorted
 ```
+
+## Specs vs Plans — Mental Model
+
+Inspired by the bear-plan pi extension, plans are first-class branch-scoped artifacts:
+
+| | Spec | Plan | ADR |
+|---|---|---|---|
+| **Answers** | What & why | How, right now | Which choice & why |
+| **Lifetime** | Long-lived | Branch lifetime | Forever (immutable once accepted) |
+| **Scope** | Feature/capability | `(project, initiative)` — usually a branch | One decision |
+| **Mutability** | Evolves slowly | Refined every turn | Frozen post-acceptance |
+| **Folder** | `specs/` | `plans/` | `architecture/` |
+| **Trigger to write** | New capability proposed | New branch / new feature work begins | Significant tradeoff resolved |
+
+A typical flow: a **spec** is drafted → a **plan** is created on a feature branch implementing it → the plan is refined turn by turn → ADRs spawn from notable decisions → on merge, the plan is marked completed and the spec moves to `status: implemented`.

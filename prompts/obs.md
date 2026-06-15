@@ -1,6 +1,6 @@
 ---
-description: "Manage your Obsidian agent memory vault — initialize, analyze projects, write session summaries, scaffold projects, create notes, update TODOs, search vault knowledge, and manage relationships."
-argument-hint: "<init|analyze|recap|project|note|todo|lookup|relate> [args]"
+description: "Manage your Obsidian agent memory vault — initialize, analyze projects, write session summaries, scaffold projects, create notes, manage specs and branch-scoped plans, update TODOs, search vault knowledge, and manage relationships."
+argument-hint: "<init|analyze|recap|project|note|spec|plan|todo|lookup|relate> [args]"
 ---
 
 # /obs — Vault Management (Pi)
@@ -31,6 +31,8 @@ Execute the matching command procedure from the obs-memory skill (`skills/obs/SK
 | `recap` | `recap` |
 | `project` | `project` — pass `${@:2}` as name |
 | `note` | `note` — pass `$2` as type, `${@:3}` as name |
+| `spec` | `spec` — pass `$2` as action (`new`/`list`/`status`/`link`), `${@:3}` as args |
+| `plan` | `plan` — pass `$2` as action (`new`/`current`/`list`/`refine`/`complete`/`abandon`), `${@:3}` as args |
 | `todo` | `todo` — pass `${@:2}` as action |
 | `lookup` | `lookup` — pass `${@:2}` as query |
 | `relate` | `relate` — pass `${@:2}` as args |

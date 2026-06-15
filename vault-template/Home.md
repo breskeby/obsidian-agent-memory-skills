@@ -26,12 +26,23 @@ Persistent knowledge graph for coding agent sessions.
 ## Structure
 
 ```
-projects/{name}/          → Project-scoped: architecture, components, patterns
+projects/{name}/
+  architecture/           → ADRs (accepted design decisions)
+  components/             → Per-component notes
+  specs/                  → Stable design docs — the WHAT (outlive branches)
+  plans/                  → Initiative-scoped implementation plans — the HOW
+  patterns/               → Project-specific patterns
 domains/{tech}/           → Cross-project domain knowledge
 patterns/                 → Universal patterns (SOLID, testing strategies, etc.)
 sessions/                 → Chronological session logs (tagged by project)
 todos/                    → Active work items (tagged by project)
 ```
+
+### Specs vs Plans vs ADRs
+
+- **Spec** — *What* and *why*. Stable, long-lived, branch-independent. One per feature/capability.
+- **Plan** — *How*, right now, for this initiative (usually a branch). One per `(project, scope)`. Accumulates refinements; archived when shipped or abandoned.
+- **ADR** — A single accepted decision with context, alternatives, and consequences. Immutable once accepted.
 
 ## Conventions
 
