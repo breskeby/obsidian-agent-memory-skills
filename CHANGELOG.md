@@ -2,6 +2,24 @@
 
 All notable changes to obs-memory are documented here.
 
+## [2.3.0] — 2026-06-15
+
+### Added
+
+- **Pi agent first-class support** — mirrors the full Claude Code feature set:
+  - `package.json` with `pi` key — enables `pi install git:github.com/adamtylerlynch/obsidian-agent-memory-skills` and automatic resource discovery
+  - `extensions/obs-memory.ts` — Pi extension that hooks `before_agent_start`; on the first turn of each new session it injects the full `SKILL.md` into the system prompt, triggering the Session Start — Orientation procedure automatically (the Pi equivalent of Claude Code’s always-present plugin skill)
+  - `prompts/obs.md` — Pi prompt template registering `/obs` as a native command with argument dispatch (mirrors `commands/obs.md` for Claude Code)
+  - `init` command now emits a Pi-appropriate `AGENTS.md` config snippet alongside the existing Claude Code (`CLAUDE.md`) and generic (env var) snippets
+- Pi added to Agent Compatibility table in README with "Full support" tier
+- README explains proactive skill mechanisms per agent (plugin.json vs extension vs progressive disclosure)
+
+### Fixed
+
+- `plugin.json` referenced non-existent path `./skills/obs-memory` — corrected to `./skills/obs`
+- `commands/obs.md` and `setup.sh` also referenced the stale `skills/obs-memory` path — corrected to `skills/obs`
+- README Package Contents tree showed `skills/obs-memory/` — corrected to `skills/obs/`
+
 ## [2.2.0] — 2026-02-17
 
 ### Added

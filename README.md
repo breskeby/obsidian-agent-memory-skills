@@ -18,7 +18,27 @@ Works with **any agent** that supports the [Agent Skills](https://agentskills.io
 
 ## Installation
 
-### Via skills.sh (recommended)
+### Via pi (Pi agent)
+
+```bash
+pi install git:github.com/adamtylerlynch/obsidian-agent-memory-skills
+```
+
+Or install from a local checkout:
+
+```bash
+pi install ./obsidian-agent-memory-skills
+```
+
+The `/obs` prompt template and `obs-memory` skill are registered automatically. Use the command directly:
+
+```
+/obs init
+/obs recap
+/obs lookup deps AuthMiddleware
+```
+
+### Via skills.sh (other agents)
 
 ```bash
 npx skills add adamtylerlynch/obsidian-agent-memory-skills
@@ -116,20 +136,29 @@ These work without explicit commands:
 | `relate show <name>` | Display all relationships for a note |
 | `relate tree <name> [depth]` | BFS walk of the dependency tree |
 
-In Claude Code, these are available as `/obs <command>`. In other agents, use natural language (e.g., "write a session summary to the vault").
+In Claude Code and Pi, these are available as `/obs <command>`. In other agents, use natural language (e.g., "write a session summary to the vault").
 
 ## Agent Compatibility
 
 | Agent | How it works |
 |---|---|
 | **Claude Code** | Full support — proactive skill + `/obs` slash command |
+| **Pi** | Full support — proactive skill via extension + `/obs` prompt template + `pi install` package |
 | **Cursor** | Skill loaded via skills.sh, responds to natural language commands |
 | **Cline** | Skill loaded via skills.sh, responds to natural language commands |
 | **Windsurf** | Skill loaded via skills.sh, responds to natural language commands |
 | **GitHub Copilot** | Skill loaded via skills.sh, responds to natural language commands |
 | **Others** | Any agent supporting [Agent Skills spec](https://agentskills.io/specification) |
 
-For agents without skills.sh support, you can manually add the contents of `skills/obs-memory/SKILL.md` to your agent's instructions file (e.g., `.cursorrules`, `.windsurfrules`, `.clinerules`).
+For agents without skills.sh support, you can manually add the contents of `skills/obs/SKILL.md` to your agent's instructions file (e.g., `.cursorrules`, `.windsurfrules`, `.clinerules`).
+
+### How proactive skills work per agent
+
+| Agent | Proactive mechanism |
+|---|---|
+| **Claude Code** | `plugin.json` loads the skill into the system prompt on every turn. The agent always sees the session-start orientation instructions. |
+| **Pi** | `extensions/obs-memory.ts` hooks `before_agent_start`. On the first turn of each new session it injects the full `SKILL.md` into the system prompt, triggering orientation exactly as Claude Code does. Subsequent turns use progressive disclosure normally. |
+| **Others** | Progressive disclosure only — orientation fires when the agent loads the skill on demand. Use natural language to trigger it explicitly if needed. |
 
 ## Usage Examples
 
@@ -247,11 +276,16 @@ AgentMemory/
 
 ```
 obsidian-agent-memory-skills/
+├── package.json                      # Pi package manifest (pi install)
 ├── .claude-plugin/
 │   └── plugin.json                   # Plugin metadata (Claude Code + skills.sh)
 ├── skills/
-│   └── obs-memory/
+│   └── obs/
 │       └── SKILL.md                  # Agent-agnostic skill definition (source of truth)
+├── extensions/
+│   └── obs-memory.ts                 # Pi extension — proactive session-start orientation
+├── prompts/
+│   └── obs.md                        # Pi prompt template (/obs)
 ├── commands/
 │   └── obs.md                        # Claude Code slash command (/obs)
 ├── vault-template/                   # Bundled vault template

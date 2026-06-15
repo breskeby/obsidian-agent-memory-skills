@@ -253,12 +253,19 @@ Bootstrap a new Obsidian Agent Memory vault from the bundled template.
    - Set the vault path via `OBSIDIAN_VAULT_PATH` environment variable or agent config
    - Start working — the agent will build the knowledge graph as it goes
 
-8. **Generate agent config snippet**: Output a vault path snippet appropriate for the user's agent. For Claude Code, output a `CLAUDE.md` snippet:
-   ```markdown
-   ## Obsidian Knowledge Vault
-   Persistent knowledge vault at `$VAULT`.
-   ```
-   For other agents, output a generic instruction: "Add `OBSIDIAN_VAULT_PATH=$VAULT` to your environment or agent config."
+8. **Generate agent config snippet**: Output a vault path snippet appropriate for the user's agent:
+
+   - **Claude Code** — output a `CLAUDE.md` snippet:
+     ```markdown
+     ## Obsidian Knowledge Vault
+     Persistent knowledge vault at `$VAULT`.
+     ```
+   - **Pi** — output an `AGENTS.md` snippet (same format; pi reads `AGENTS.md` for global agent instructions):
+     ```markdown
+     ## Obsidian Knowledge Vault
+     Persistent knowledge vault at `$VAULT`.
+     ```
+   - **Others** — output a generic instruction: "Add `OBSIDIAN_VAULT_PATH=$VAULT` to your shell profile or agent config."
 
 9. **Auto-scaffold current project**: If inside a git repo, automatically run the `project` command to scaffold the current project in the vault.
 

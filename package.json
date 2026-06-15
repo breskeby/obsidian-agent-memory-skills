@@ -1,0 +1,25 @@
+{
+  "name": "obsidian-agent-memory-skills",
+  "description": "Persistent Obsidian-based memory for coding agents. Give your agent persistent memory across sessions using an Obsidian knowledge vault.",
+  "version": "2.3.0",
+  "author": {
+    "name": "Tyler Lynch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adamtylerlynch/obsidian-agent-memory-skills"
+  },
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "agent-skills",
+    "obsidian",
+    "memory",
+    "coding-agent"
+  ],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills/obs"],
+    "prompts": ["./prompts"]
+  }
+}

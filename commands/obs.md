@@ -23,7 +23,7 @@ Verify `$VAULT/Home.md` exists. If not → suggest `/obs init`.
 
 ## Dispatch
 
-Execute the matching command procedure from the obs-memory skill (`skills/obs-memory/SKILL.md` § Commands):
+Execute the matching command procedure from the obs-memory skill (`skills/obs/SKILL.md` § Commands):
 
 | `$ARGUMENTS[0]` | Skill procedure |
 |---|---|
