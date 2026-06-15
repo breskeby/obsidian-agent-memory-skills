@@ -13,10 +13,19 @@ Read the skill instructions from `skills/obs/SKILL.md` (locate the skill package
 
 **$VAULT_NAME**: `basename "$VAULT"`
 
-**$PROJECT**:
+**$PROJECT**: canonical repo name — must be stable across git worktrees of the same repo (do **not** use `--show-toplevel`, which returns the worktree path).
 ```bash
-basename $(git rev-parse --show-toplevel 2>/dev/null) 2>/dev/null || basename $(pwd)
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -n "$common_dir" ]; then
+  case "$common_dir" in
+    */.git) basename "$(dirname "$common_dir")" ;;
+    *)      basename "${common_dir%.git}" ;;
+  esac
+else
+  basename "$(pwd)"
+fi
 ```
+See `skills/obs/SKILL.md` § Session Start Step 2 for the full resolution chain (common-dir → remote URL → cwd basename).
 
 Verify `$VAULT/Home.md` exists. If not → suggest running `/obs init`.
 

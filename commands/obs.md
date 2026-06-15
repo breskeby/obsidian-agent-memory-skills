@@ -16,7 +16,17 @@ Resolve variables, then dispatch to the obs-memory skill procedure.
 
 **$PROJECT**:
 ```bash
-basename $(git rev-parse --show-toplevel 2>/dev/null) 2>/dev/null || basename $(pwd)
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -n "$common_dir" ]; then
+  case "$common_dir" in
+    */.git) basename "$(dirname "$common_dir")" ;;
+    *)      basename "${common_dir%.git}" ;;
+  esac
+else
+  basename "$(pwd)"
+fi
+# Canonical repo name; stable across git worktrees. Do NOT use --show-toplevel.
+# See skills/obs/SKILL.md § Session Start Step 2.
 ```
 
 Verify `$VAULT/Home.md` exists. If not → suggest `/obs init`.
