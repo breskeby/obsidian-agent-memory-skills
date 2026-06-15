@@ -39,12 +39,36 @@ Know what's pending, in-progress, and recently completed.
 
 ### Step 2: Detect current project and read its overview
 
-Auto-detect the project from the current working directory:
-```bash
-basename $(git rev-parse --show-toplevel 2>/dev/null) 2>/dev/null || basename $(pwd)
-```
+Auto-detect the project from the current working directory. **Critical:** resolve to the *canonical* repo identity so git worktrees of the same repo map to a single vault project, not one per worktree directory.
 
-Then check if a matching project exists by listing files in `$VAULT/projects/*/`. Match the git repo name (or directory name) against project folder names. If a match is found, read the project overview at `$VAULT/projects/{matched-name}/{matched-name}.md`.
+Resolution order (first match wins):
+
+1. **Git common dir basename** — points at the main repo even from a linked worktree:
+   ```bash
+   common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+   if [ -n "$common_dir" ]; then
+     # $common_dir typically ends in `/.git` (or is a bare repo dir); its parent is the main repo root
+     case "$common_dir" in
+       */.git) basename "$(dirname "$common_dir")" ;;
+       *)      basename "${common_dir%.git}" ;;
+     esac
+   fi
+   ```
+   This returns the same name whether you're in `~/dev/myproject` or in a worktree like `~/dev/myproject-feature-x` created via `git worktree add`.
+
+2. **Git remote URL** (sanity check / tiebreaker) — if step 1 fails or you need to disambiguate:
+   ```bash
+   git remote get-url origin 2>/dev/null | sed -E 's#.*/([^/]+?)(\.git)?$#\1#'
+   ```
+
+3. **Current directory basename** — last resort when there's no git repo at all:
+   ```bash
+   basename "$(pwd)"
+   ```
+
+Then check if a matching project exists by listing files in `$VAULT/projects/*/`. Match the canonical name against project folder names. If a match is found, read the project overview at `$VAULT/projects/{matched-name}/{matched-name}.md`.
+
+**Worktree note:** when you're in a worktree, the project overview's `path:` frontmatter still points at the main repo root. That's intentional — the vault tracks the *project*, not the checkout. Per-branch state belongs in `plans/` (scoped by branch), not in a separate project.
 
 This project overview contains wikilinks to all components, patterns, architecture decisions, and domains. **Do not read those linked notes yet** — follow them on demand when the current task requires that context.
 
@@ -296,8 +320,16 @@ Read each discovered file. For large files (README, agent configs), read fully. 
 
 Also gather:
 - Repo URL from `git remote get-url origin`
-- Repo root path from `git rev-parse --show-toplevel`
-- Active branch from `git branch --show-current`
+- **Canonical repo root** from the git common dir (so worktrees resolve to the main repo):
+  ```bash
+  common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  case "$common_dir" in
+    */.git) dirname "$common_dir" ;;
+    *)      printf '%s\n' "${common_dir%.git}" ;;
+  esac
+  ```
+  Do **not** use `git rev-parse --show-toplevel` here — it returns the worktree path, which would cause `analyze` to scaffold a duplicate project for every worktree.
+- Active branch from `git branch --show-current` (used for plan scope, not project identity)
 - Directory tree (top 2 levels of source directories, excluding hidden/vendor/node_modules)
 - File extension frequency (for language detection)
 
@@ -484,7 +516,7 @@ Scaffold a new project in the vault. Uses the first argument as the project name
 
 #### Steps:
 
-1. **Determine project name**: Use the argument if provided, otherwise use `$PROJECT`.
+1. **Determine project name**: Use the argument if provided, otherwise use `$PROJECT` (which was resolved via the canonical-name chain in Session Start — git common dir → remote URL → cwd basename, so worktrees collapse to the main repo name).
 
 2. **Check if project exists**: Look for `$VAULT/projects/{name}/{name}.md`. If it exists, tell the user and offer to open it instead.
 
@@ -503,7 +535,7 @@ Scaffold a new project in the vault. Uses the first argument as the project name
    tags: [project/{short-name}]
    type: project
    repo: {git remote url if available}
-   path: {working directory}
+   path: {canonical repo root — not the worktree path; see Session Start Step 2}
    language: {detected from files}
    framework:
    created: {YYYY-MM-DD}
