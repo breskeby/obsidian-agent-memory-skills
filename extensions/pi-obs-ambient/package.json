@@ -1,0 +1,11 @@
+{
+  "name": "pi-obs-ambient",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension making the obs-memory vault ambient — auto-lookup before each turn, status-line feedback.",
+  "type": "module",
+  "main": "index.ts",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

@@ -4,6 +4,7 @@ type: adr
 project: "[[projects/{{project-name}}/{{project-name}}]]"
 status: proposed | accepted | superseded
 created: {{date}}
+# triggers: []        # uncomment for ADRs whose topic recurs in prompts; usually omitted
 ---
 
 # {{title}}

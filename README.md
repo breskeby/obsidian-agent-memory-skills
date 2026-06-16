@@ -14,6 +14,7 @@ Works with **any agent** that supports the [Agent Skills](https://agentskills.io
 - **Structured lookups** — `lookup` subcommands for deps, consumers, related notes, type/layer filtering, key files, and freetext search
 - **Automatic behaviors** — session end detection, component discovery offers, first-run guidance
 - **Project analysis** — `analyze` command scans your repo and hydrates the vault with populated notes from README, CLAUDE.md, ADRs, and source structure
+- **Session tracking that stays current** — Dataview-backed live `Session Log` plus `/obs sync sessions` rebuild for non-Dataview/static consumers
 - **Token-optimized** — frontmatter-first scanning, CLI over file reads, scoped navigation
 
 ## Installation
@@ -119,7 +120,8 @@ These work without explicit commands:
 |---|---|
 | `init [path]` | Initialize a new vault from the bundled template |
 | `analyze` | Analyze the current project and hydrate the vault with populated notes |
-| `recap` | Write a session summary from git history, update TODOs |
+| `recap` | Write a session summary from git history, update TODOs, rebuild session indexes |
+| `sync [sessions]` | Rebuild derived indexes like `sessions/Session Log.md` from source notes |
 | `project [name]` | Scaffold a new (empty) project in the vault |
 | `note component [name]` | Create a component note from template |
 | `note adr [title]` | Create an architecture decision record |
@@ -171,7 +173,26 @@ Start a session in any project directory. If the project has notes in the vault,
 
 ### End-of-session summary
 
-Ask your agent to write a session summary (or use `/obs recap` in Claude Code). The agent examines your git log and diffs, writes a session note, and updates your TODOs.
+Ask your agent to write a session summary (or use `/obs recap` in Claude Code). The agent examines your git log and diffs, writes a session note, updates your TODOs, and rebuilds the session index.
+
+### Session log tracking
+
+The recommended setup is both:
+1. **Dataview live rendering** in `sessions/Session Log.md` for an always-current view inside Obsidian
+2. **`/obs sync sessions`** to regenerate a static fallback table from `type: session` notes
+
+Treat the individual session notes as the source of truth. `Session Log.md` is derived.
+
+A concrete helper script is bundled at `scripts/sync_sessions.py`:
+
+```bash
+python3 scripts/sync_sessions.py "$OBSIDIAN_VAULT_PATH" sessions
+```
+
+In Pi, the bundled `obs-memory` extension now also automates this at runtime:
+- `/obs recap` triggers an automatic post-turn session-log sync
+- `/obs-sync-sessions` runs the rebuild manually
+- vault path resolution follows the same intent as the skill: `OBSIDIAN_VAULT_PATH` first, then loaded context files (`AGENTS.md`/`CLAUDE.md`) looking for an `Obsidian Knowledge Vault` section, then `~/Documents/AgentMemory`
 
 ### Scaffold a new project
 
@@ -261,7 +282,7 @@ AgentMemory/
 ├── patterns/
 │   └── Universal Patterns.md         # Language-agnostic patterns
 ├── sessions/
-│   └── Session Log.md                # Session chronology
+│   └── Session Log.md                # Generated session index (Dataview + static fallback)
 ├── todos/
 │   └── Active TODOs.md               # Current work items
 ├── templates/                        # Note templates
@@ -300,6 +321,8 @@ obsidian-agent-memory-skills/
 │       ├── Component Note.md
 │       ├── Session Note.md
 │       └── Architecture Decision.md
+├── scripts/
+│   └── sync_sessions.py              # Rebuilds sessions/Session Log.md from session notes
 ├── setup.sh                          # Shell-based vault setup
 └── examples/
     └── populated-vault.md            # Example of a vault after real use

@@ -12,66 +12,154 @@
  *
  * This extension bridges that gap: on the first turn of each new session it
  * injects the full SKILL.md into the system prompt, triggering the orientation
- * procedure exactly as Claude Code does. Subsequent turns use progressive
- * disclosure normally (no extra token cost).
+ * procedure exactly as Claude Code does. It also provides concrete runtime
+ * automation for session-log syncing after `/obs recap`.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+function isNewSession(ctx: any): boolean {
+	return !ctx.sessionManager
+		.getBranch()
+		.some(
+			(e: any) => e.type === "message" && e.message?.role === "assistant",
+		);
+}
+
+function expandHome(path: string): string {
+	if (path.startsWith("~/")) {
+		return resolve(process.env.HOME || "~", path.slice(2));
+	}
+	return path;
+}
+
+function extractVaultPathFromText(text: string): string | null {
+	const sectionMatch = text.match(
+		/^#{1,6}\s+Obsidian Knowledge Vault\s*$([\s\S]*?)(?=^#{1,6}\s+|\Z)/im,
+	);
+	if (!sectionMatch) return null;
+	const section = sectionMatch[1];
+
+	const backticked = section.match(/`((?:~|\/)[^`\n]+)`/);
+	if (backticked?.[1]) return expandHome(backticked[1]);
+
+	const plain = section.match(/(?:^|\s)((?:~|\/)[^\s)]+)(?:\s|$)/m);
+	if (plain?.[1]) return expandHome(plain[1]);
+
+	return null;
+}
+
+function resolveVaultPath(contextFiles?: Array<{ path?: string; content?: string }>): string {
+	if (process.env.OBSIDIAN_VAULT_PATH) {
+		return process.env.OBSIDIAN_VAULT_PATH;
+	}
+
+	for (const file of contextFiles || []) {
+		const parsed = file.content ? extractVaultPathFromText(file.content) : null;
+		if (parsed) return parsed;
+	}
+
+	return resolve(process.env.HOME || "~", "Documents", "AgentMemory");
+}
+
+function resolveSkillRoot(skillPath?: string): string | null {
+	if (!skillPath) return null;
+	return dirname(dirname(dirname(skillPath)));
+}
+
+async function runSessionSync(skillRoot: string, vault: string) {
+	const script = resolve(skillRoot, "scripts", "sync_sessions.py");
+	if (!existsSync(script)) {
+		throw new Error(`sync helper not found: ${script}`);
+	}
+	await execFileAsync("python3", [script, vault, "sessions"]);
+}
 
 export default function (pi: ExtensionAPI) {
-	// Tracks whether we've already injected the skill for the current session.
-	// Reset on every session_start so /new, /resume, and /fork all get a fresh
-	// orientation on their first turn.
 	let orientationDone = false;
+	let pendingRecapSync = false;
+	let obsSkillPath: string | undefined;
+	let resolvedVaultPath: string | undefined;
 
 	pi.on("session_start", () => {
 		orientationDone = false;
+		pendingRecapSync = false;
+	});
+
+	pi.registerCommand("obs-sync-sessions", {
+		description: "Rebuild sessions/Session Log.md from session notes",
+		handler: async (_args, ctx) => {
+			const skillRoot = resolveSkillRoot(obsSkillPath);
+			const vault = resolvedVaultPath ||
+				resolveVaultPath(ctx.getSystemPromptOptions?.().contextFiles);
+			if (!skillRoot) {
+				ctx.ui.notify("obs-memory skill path not available; cannot locate sync helper", "error");
+				return;
+			}
+			try {
+				await runSessionSync(skillRoot, vault);
+				ctx.ui.notify(`Session log synced: ${vault}/sessions/Session Log.md`, "info");
+			} catch (error: any) {
+				ctx.ui.notify(`Session log sync failed: ${error?.message || error}`, "error");
+			}
+		},
+	});
+
+	pi.on("input", async (event) => {
+		const text = event.text.trim();
+		if (text === "/obs recap" || text.startsWith("/obs recap ")) {
+			pendingRecapSync = true;
+		}
+		return { action: "continue" as const };
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		// Already oriented this session — leave the system prompt alone.
-		if (orientationDone) return;
-		orientationDone = true;
-
-		// Skip if this is a resumed or continued session (assistant has already
-		// responded before). Only true new-session first turns need orientation.
-		const isNewSession = !ctx.sessionManager
-			.getBranch()
-			.some(
-				(e: any) =>
-					e.type === "message" && e.message?.role === "assistant",
-			);
-
-		if (!isNewSession) return;
-
-		// Find the obs-memory skill from those already loaded into this session.
-		// Using the skill registry avoids hardcoding install paths and works
-		// whether the package was installed via `pi install`, symlinked locally,
-		// or discovered from ~/.pi/agent/skills/.
 		const obsSkill = event.systemPromptOptions?.skills?.find(
 			(s) => s.name === "obs-memory",
 		);
+		obsSkillPath = obsSkill?.filePath;
+		resolvedVaultPath = resolveVaultPath(event.systemPromptOptions?.contextFiles);
 
-		if (!obsSkill?.filePath) {
-			// Skill not loaded (user disabled it, vault not set up yet, etc.)
-			// Degrade gracefully — don't block the turn.
-			return;
-		}
+		if (orientationDone) return;
+		orientationDone = true;
+
+		if (!isNewSession(ctx)) return;
+		if (!obsSkill?.filePath) return;
 
 		let skillContent: string;
 		try {
 			skillContent = readFileSync(obsSkill.filePath, "utf-8");
 		} catch {
-			// File unreadable — degrade gracefully.
 			return;
 		}
 
-		// Inject the full skill into the system prompt for this first turn.
-		// The skill's own "Session Start — Orientation" section then fires
-		// automatically, exactly as it does under Claude Code's plugin system.
 		return {
 			systemPrompt: event.systemPrompt + "\n\n" + skillContent,
 		};
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		if (!pendingRecapSync) return;
+		pendingRecapSync = false;
+
+		const skillRoot = resolveSkillRoot(obsSkillPath);
+		const vault = resolvedVaultPath || resolveVaultPath();
+		if (!skillRoot) {
+			ctx.ui.notify("obs-memory recap finished, but sync helper could not be located", "error");
+			return;
+		}
+
+		try {
+			await runSessionSync(skillRoot, vault);
+			ctx.ui.notify(`Auto-synced session log after /obs recap`, "info");
+		} catch (error: any) {
+			ctx.ui.notify(`Auto-sync after /obs recap failed: ${error?.message || error}`, "error");
+		}
 	});
 }

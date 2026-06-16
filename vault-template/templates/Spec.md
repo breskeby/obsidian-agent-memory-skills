@@ -8,6 +8,7 @@ owner:
 related-plans: []
 related-components: []
 related-adrs: []
+triggers: []          # 3–8 lowercase phrases describing the capability this spec covers
 ---
 
 # {{title}}

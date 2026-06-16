@@ -8,6 +8,7 @@ language:
 framework:
 created: {{date}}
 status: active
+triggers: []          # 2–3 broad phrases so project-level questions surface this overview
 ---
 
 # {{project-name}}

@@ -5,6 +5,7 @@ projects:
   - "[[projects/{{project-name}}/{{project-name}}]]"
 created: {{date}}
 branch:
+summary:
 ---
 
 # {{date}} — {{title}}

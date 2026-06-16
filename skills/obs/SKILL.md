@@ -1,6 +1,6 @@
 ---
 name: obs-memory
-description: "Persistent Obsidian-based memory for coding agents. Use at session start to orient from a knowledge vault, during work to look up architecture/component/pattern/spec/plan notes, and when discoveries are made to write them back. Activate when the user mentions obsidian memory, obsidian vault, obsidian notes, or /obs commands. Provides commands: init, analyze, recap, project, note, spec, plan, todo, lookup, relate."
+description: "Persistent Obsidian-based memory for coding agents. Use at session start to orient from a knowledge vault, during work to look up architecture/component/pattern/spec/plan notes, and when discoveries are made to write them back. Activate when the user mentions obsidian memory, obsidian vault, obsidian notes, or /obs commands. Provides commands: init, analyze, recap, sync, project, note, spec, plan, todo, lookup, relate."
 metadata:
   author: adamtylerlynch
   version: "2.2"
@@ -102,6 +102,19 @@ When the vault doesn't exist at any resolved path, guide the user through `init`
 
 **Principle: Use CLI queries first, file reads second.** The Obsidian CLI provides structured access to properties, links, backlinks, tags, and search — prefer these over reading entire files.
 
+### Injected `<vault-context>` is authoritative
+
+If you see a `<vault-context source="obs-memory">` block in your system prompt or context, it was injected automatically by the **pi-obs-ambient** extension (when running under pi) or an equivalent host integration. The block lists vault notes that match entities in the current user prompt, with their `type`, `summary`, and vault-relative path.
+
+**Rules when `<vault-context>` is present:**
+
+1. **Treat it as ground truth.** The vault is your persistent memory; injected notes encode prior decisions, architecture constraints, and gotchas you have already learned. Do not re-derive what is already written down.
+2. **Cite with `[[NoteTitle]]`** whenever a claim in your reply derives from an injected note. Citations are not decorative — they let the user (and future sessions) trace your reasoning back to the source. A reply that uses vault knowledge without citing it is incomplete.
+3. **Fetch the body if the summary is insufficient.** Inject only summaries, never full bodies. If a summary points at the right note but you need the details, follow the path with a `read` or `obsidian outline`/`obsidian property:read` call.
+4. **If the injected note is wrong, say so explicitly in your reply.** Flag the contradiction by name (e.g. "`[[Task Avoidance API]]` says X but the code now does Y — the note is stale"). An auto-update tool will land in a later milestone; for now a flag is enough so the user can decide.
+5. **Do not parrot the block back to the user.** It is for your reasoning. Quote or summarise selectively only when directly relevant to what you are explaining.
+6. **Absence is not authoritative.** No `<vault-context>` block means no matches were found for the prompt’s entities, not that the vault is empty. If you suspect a relevant note exists, run a CLI lookup (next section) before assuming you have to figure it out from scratch.
+
 ### CLI-first lookups (preferred)
 
 Use these CLI commands for targeted queries without consuming file-read tokens:
@@ -177,11 +190,38 @@ Always include in new notes:
 ```yaml
 ---
 tags: [category, project/short-name]
-type: <component|adr|session|project>
+type: <component|adr|session|project|pattern|spec|plan>
 project: "[[projects/{name}/{name}]]"
 created: YYYY-MM-DD
+triggers:                # see “Triggers” below — lowercase phrases that should surface this note
+  - example phrase
+  - another phrase
 ---
 ```
+
+### Triggers (first-class discoverability)
+
+The `triggers:` frontmatter is a **list of lowercase natural-language phrases that should surface this note** when they appear in a user prompt. Hosts that run an ambient-lookup engine over the vault (such as the [`pi-obs-ambient`](../../extensions/pi-obs-ambient/README.md) pi extension) build an inverted index over all `triggers:` at session start and inject matching notes into the system prompt automatically. Without triggers, a note is reachable only via title/alias search, which fails for the way humans actually phrase questions (`"how does the gradle build work"` does not match `Task Avoidance API`).
+
+**Authoring rules:**
+
+1. **Lowercase, natural-language phrases.** Not titles, not identifiers — the form a colleague would actually type. `gradle build`, not `GradleBuild`; `task avoidance`, not `TaskAvoidanceAPI`.
+2. **Multi-word phrases preferred over single words.** Single-word triggers (`gradle`, `build`) match too broadly and pull the note into unrelated prompts. Aim for 2–3 words.
+3. **3–8 triggers per note.** Fewer and you miss real prompts; more and you spam unrelated turns. Stop when you can't think of a phrase that wouldn't also fit a different note.
+4. **Cover synonyms and aliases.** `dependency rules`, `transitive deps`, `component metadata` all point at the same note — list them.
+5. **Re-use a shared parent phrase to cluster related notes.** Multiple build notes can all carry `gradle build` so a generic question surfaces the whole cluster; a specific question hits the narrower triggers exclusively. This is by design.
+6. **Don't add triggers to session notes.** Sessions are point-in-time logs; surfacing them in future turns is noise.
+7. **Avoid words that are universal in the codebase.** A trigger of `class` or `service` in a Java project will match every prompt. Prefer domain-distinctive phrases.
+
+**Matching semantics (host-defined, but follow these expectations):**
+
+- Substring match against the lowercased prompt with **word-boundary** edges. `gradle build` matches `"the gradle build is great"` but not `"gradle builds"`.
+- No stemming, no fuzzy matching, no synonyms inferred. If you want plural forms to match, list them explicitly.
+- Notes are deduped across triggers — a single note matched by three triggers is injected once.
+
+**When to skip triggers:**
+
+For notes that are rarely useful out of context (e.g. ADRs that record a specific decision in detail), omit `triggers:` and rely on backlinks plus the project-overview injection fallback. The goal is signal, not coverage.
 
 ### Wikilink conventions
 - Link to related notes: `[[projects/{name}/components/Component Name|Component Name]]`
@@ -202,6 +242,7 @@ layer: ""
 depends-on: []
 depended-on-by: []
 key-files: []
+triggers: []          # 3–8 lowercase phrases — see “Triggers” above
 ---
 ```
 Sections: Purpose, Gotchas
@@ -214,9 +255,22 @@ type: adr
 project: "[[projects/{name}/{name}]]"
 status: proposed | accepted | superseded
 created: {date}
+triggers: []          # optional; ADRs that record narrow decisions usually skip this
 ---
 ```
 Sections: Context, Decision, Alternatives Considered, Consequences
+
+**Pattern Note:**
+```yaml
+---
+tags: [patterns, project/{short-name}]
+type: pattern
+project: "[[projects/{name}/{name}]]"
+created: {date}
+triggers: []          # 3–8 lowercase phrases
+---
+```
+Sections: Pattern, When to Use, Implementation, Examples
 
 **Session Note:**
 ```yaml
@@ -227,9 +281,12 @@ projects:
   - "[[projects/{name}/{name}]]"
 created: {date}
 branch: {branch-name}
+summary: ""
 ---
 ```
 Sections: Context, Work Done, Discoveries, Decisions, Next Steps
+
+> Session notes intentionally have **no `triggers:`** — they are point-in-time records and should not surface in future turns.
 
 ## Commands
 
@@ -375,8 +432,11 @@ During `analyze`, also detect existing spec/plan-like documents in the repo and 
    framework: {detected framework(s)}
    created: {YYYY-MM-DD}
    status: active
+   triggers: [{2–3 broad phrases like "{name} architecture", "{name} overview"}]
    ---
    ```
+
+   The `path:` is consumed by ambient-lookup engines as the fallback target when no trigger or entity matches but the agent's `cwd` is inside this repo. Keep it accurate (the canonical repo root, not a worktree).
    Sections:
    - **Architecture**: Real description from analysis
    - **Components**: Table with wikilinks to component notes
@@ -397,9 +457,12 @@ During `analyze`, also detect existing spec/plan-like documents in the repo and 
    depends-on: []
    depended-on-by: []
    key-files: [{key files list}]
+   triggers: [{3–8 lowercase phrases derived from component name + role}]
    ---
    ```
    Sections: Purpose, Gotchas
+
+   **Generating triggers during `analyze`**: for each component, derive triggers from (a) the component's directory name with dashes turned into spaces (`build-tools` → `build tools`), (b) the README/agent-config phrasing that describes its role ("the build system", "REST layer"), and (c) the layer (`layer: build` → add `build infrastructure`). Skip generic words (`server`, `core`) when they would match every prompt. Always include the project's short name in at least one trigger if it's distinctive (e.g. `elasticsearch build`).
 
 3. **Pattern notes** (`$VAULT/projects/{name}/patterns/{Pattern}.md`) — From agent config conventions:
    ```yaml
@@ -408,9 +471,12 @@ During `analyze`, also detect existing spec/plan-like documents in the repo and 
    type: pattern
    project: "[[projects/{name}/{name}]]"
    created: {YYYY-MM-DD}
+   triggers: [{3–8 lowercase phrases describing when this pattern applies}]
    ---
    ```
    Sections: Pattern, When to Use, Implementation
+
+   **Generating triggers for patterns**: lift them from the pattern's *trigger conditions* in the agent config — "when handling REST requests" → `rest handler`, `rest endpoint`. Patterns are answers to questions, so triggers should be the question shape (`how do I add an endpoint`, `error handling`).
 
 4. **ADR imports** (`$VAULT/projects/{name}/architecture/ADR-{NNNN} {title}.md`) — From existing repo ADRs:
    ```yaml
@@ -475,6 +541,7 @@ Write a session summary note and update TODOs.
    obsidian vault=$VAULT_NAME property:set path="sessions/{YYYY-MM-DD} - {title}" name="type" value="session" type="text"
    obsidian vault=$VAULT_NAME property:set path="sessions/{YYYY-MM-DD} - {title}" name="branch" value="{current-branch}" type="text"
    obsidian vault=$VAULT_NAME property:set path="sessions/{YYYY-MM-DD} - {title}" name="projects" value="[[projects/$PROJECT/$PROJECT]]" type="list"
+   obsidian vault=$VAULT_NAME property:set path="sessions/{YYYY-MM-DD} - {title}" name="summary" value="{one-line-summary}" type="text"
    ```
    Then append body content:
    ```bash
@@ -489,6 +556,7 @@ Write a session summary note and update TODOs.
      - "[[projects/$PROJECT/$PROJECT]]"
    created: {YYYY-MM-DD}
    branch: {current-branch}
+   summary: "{one-line-summary}"
    ---
    ```
    Sections to fill:
@@ -504,9 +572,44 @@ Write a session summary note and update TODOs.
    - Keep items grouped by project
    - **Never leave `[x]` items in Active TODOs** — they accumulate over time and waste context window on every session start
 
-6. **Update Session Log**: Add an entry to `$VAULT/sessions/Session Log.md` with the date, project, branch, and a one-line summary.
+6. **Rebuild Session Log**: Do **not** append a single row manually. Treat session note files as the source of truth and regenerate `$VAULT/sessions/Session Log.md` from all `type: session` notes.
+   - Preferred human view: `Session Log.md` should contain a Dataview table that auto-renders from session frontmatter when opened in Obsidian.
+   - Agent hygiene: after writing a recap, run the bundled helper script from the skill package root:
+     ```bash
+     python3 "$SKILL_ROOT/scripts/sync_sessions.py" "$VAULT" sessions
+     ```
+   - If `$SKILL_ROOT` is unknown, locate it by finding `skills/obs/SKILL.md`, then resolve the package root as its grandparent directory.
 
 7. **Report** what was written.
+
+### `sync` — Rebuild Derived Indexes
+
+Rebuild denormalized index notes from canonical note files.
+
+**Usage**: `sync [sessions]`
+
+#### `sync sessions`
+
+Regenerate `$VAULT/sessions/Session Log.md` from the session note files under `$VAULT/sessions/`.
+
+Preferred implementation:
+```bash
+python3 "$SKILL_ROOT/scripts/sync_sessions.py" "$VAULT" sessions
+```
+
+Where `$SKILL_ROOT` is the package root containing `scripts/`, `skills/`, and `vault-template/`. If the package root is unknown, locate `skills/obs/SKILL.md` first and resolve `$SKILL_ROOT` as its grandparent directory.
+
+The helper script:
+1. Scans all `*.md` files in `$VAULT/sessions/` excluding `Session Log.md`
+2. Reads frontmatter and extracts `created`, `projects`/`project`, `branch`, `summary`
+3. Backfills missing `summary` from the first heading/title
+4. Rewrites `Session Log.md` with generated-note frontmatter, Dataview block, and static fallback table
+5. Sorts newest-first by `created`, then filename
+6. Is idempotent — every run rewrites the whole note from disk state
+
+If the helper script is unavailable, fall back to the manual rebuild procedure above rather than appending a single row.
+
+If no argument is provided, default to `sync sessions` for now.
 
 ### `project` — Scaffold New Project
 
@@ -575,11 +678,14 @@ layer: ""
 depends-on: []
 depended-on-by: []
 key-files: []
+triggers: []
 ---
 ```
 Sections: Purpose, Gotchas
 
 If a name argument is provided, use it as the component name. Otherwise, ask the user.
+
+**Triggers**: propose 3–8 lowercase phrases at creation time based on the component name and role (see “Triggers” in *Writing to the Vault*). Confirm with the user before writing. Examples for a `build-tools` component: `build tools`, `gradle plugins`, `published plugins`. Skip triggers only when the component is intentionally niche.
 
 #### `note adr [title]`
 
@@ -597,17 +703,23 @@ created: {YYYY-MM-DD}
 ```
 Sections: Context, Decision, Alternatives Considered, Consequences
 
+**Triggers**: ADRs usually omit triggers because they record a single decision in narrow context. Add triggers only when the decision touches a topic that future agents will repeatedly ask about (e.g. a deployment-model ADR for the whole project deserves `deployment model`, `infrastructure choice`).
+
 #### `note pattern [name]`
 
 Create at `$VAULT/projects/$PROJECT/patterns/{name}.md`:
 ```yaml
 ---
 tags: [patterns, project/{short-name}]
+type: pattern
 project: "[[projects/$PROJECT/$PROJECT]]"
 created: {YYYY-MM-DD}
+triggers: []
 ---
 ```
 Sections: Pattern, When to Use, Implementation, Examples
+
+**Triggers**: required for patterns. They are the question shapes the pattern answers (`error handling`, `how do I add an endpoint`). Without triggers a pattern is invisible to ambient lookup and only reachable by exact title.
 
 After creating any note, add a wikilink to it from the project overview.
 
