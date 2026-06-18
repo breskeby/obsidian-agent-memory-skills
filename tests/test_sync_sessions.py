@@ -107,5 +107,53 @@ class SyncSessionsTest(unittest.TestCase):
         self.assertIn("[[projects/demo/demo]]", log)
 
 
+    def test_backfills_missing_summary_into_source_note(self):
+        self.write_session(
+            "2026-06-17 - Delta.md",
+            """
+            ---
+            tags: [sessions]
+            type: session
+            projects:
+              - "[[projects/demo/demo]]"
+            created: 2026-06-17
+            branch: main
+            summary:
+            ---
+
+            # Delta first heading should become the summary
+            """,
+        )
+        self.run_sync()
+
+        note = (self.tmpdir / "sessions" / "2026-06-17 - Delta.md").read_text(encoding="utf-8")
+        self.assertIn('summary: "Delta first heading should become the summary"', note)
+        # And the Session Log picks it up
+        log = self.read_log()
+        self.assertIn("Delta first heading should become the summary", log)
+
+    def test_does_not_clobber_existing_summary(self):
+        self.write_session(
+            "2026-06-18 - Epsilon.md",
+            """
+            ---
+            tags: [sessions]
+            type: session
+            projects:
+              - "[[projects/demo/demo]]"
+            created: 2026-06-18
+            branch: main
+            summary: "Original summary"
+            ---
+
+            # Heading we should ignore
+            """,
+        )
+        self.run_sync()
+        note = (self.tmpdir / "sessions" / "2026-06-18 - Epsilon.md").read_text(encoding="utf-8")
+        self.assertIn('summary: "Original summary"', note)
+        self.assertNotIn("Heading we should ignore", note.split("---\n", 2)[1])
+
+
 if __name__ == "__main__":
     unittest.main()

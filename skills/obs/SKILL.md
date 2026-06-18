@@ -566,27 +566,28 @@ Write a session summary note and update TODOs.
    - **Decisions**: Design choices made during this session
    - **Next Steps**: What should happen next (checkboxes)
 
-5. **Update TODOs**: Edit `$VAULT/todos/Active TODOs.md`:
-   - Remove completed `[x]` items from Active TODOs — append them to `$VAULT/todos/Completed TODOs Archive.md` under a dated `## $PROJECT (YYYY-MM-DD)` heading (create the file if it doesn't exist)
-   - Add new items discovered during the session
-   - Keep items grouped by project
-   - **Never leave `[x]` items in Active TODOs** — they accumulate over time and waste context window on every session start
+5. **Update TODOs (edits only)**: Edit `$VAULT/todos/Active TODOs.md` to:
+   - Mark items completed in this session with `[x]` (leave them in place — the archival step below moves them)
+   - Add any new items discovered during the session, grouped under the project's `## {project}` heading
+   - Do **not** manually move `[x]` items to the archive; the helper script does it deterministically in step 6.
 
-6. **Rebuild Session Log**: Do **not** append a single row manually. Treat session note files as the source of truth and regenerate `$VAULT/sessions/Session Log.md` from all `type: session` notes.
-   - Preferred human view: `Session Log.md` should contain a Dataview table that auto-renders from session frontmatter when opened in Obsidian.
-   - Agent hygiene: after writing a recap, run the bundled helper script from the skill package root:
-     ```bash
-     python3 "$SKILL_ROOT/scripts/sync_sessions.py" "$VAULT" sessions
-     ```
+6. **Run the post-recap helpers** (deterministic, idempotent — safe to re-run):
+   ```bash
+   python3 "$SKILL_ROOT/scripts/sync_sessions.py" "$VAULT" sessions
+   python3 "$SKILL_ROOT/scripts/sync_todos.py"    "$VAULT" todos
+   ```
+   - `sync_sessions.py` rebuilds `$VAULT/sessions/Session Log.md` from every `type: session` note **and** backfills any missing `summary:` frontmatter from the note's first H1 — so Dataview rows are never blank.
+   - `sync_todos.py` removes every `[x]` checklist item from `Active TODOs.md` and appends it to `Completed TODOs Archive.md` under a `## {project} (YYYY-MM-DD)` heading. Empty groups are skipped.
+   - If running under pi with the bundled `obs-memory` extension, these run automatically on `agent_end` after a recap — you can skip this step but it's still safe to call.
    - If `$SKILL_ROOT` is unknown, locate it by finding `skills/obs/SKILL.md`, then resolve the package root as its grandparent directory.
 
-7. **Report** what was written.
+7. **Report** what was written (note path, # TODOs archived, log row count).
 
 ### `sync` — Rebuild Derived Indexes
 
 Rebuild denormalized index notes from canonical note files.
 
-**Usage**: `sync [sessions]`
+**Usage**: `sync [sessions|todos|all]` (default: `all`)
 
 #### `sync sessions`
 
@@ -609,7 +610,19 @@ The helper script:
 
 If the helper script is unavailable, fall back to the manual rebuild procedure above rather than appending a single row.
 
-If no argument is provided, default to `sync sessions` for now.
+#### `sync todos`
+
+Archive every `[x]` checklist item in `$VAULT/todos/Active TODOs.md` to `$VAULT/todos/Completed TODOs Archive.md`, grouped by the nearest `## {project}` heading and tagged with today's date.
+
+```bash
+python3 "$SKILL_ROOT/scripts/sync_todos.py" "$VAULT" todos
+```
+
+Idempotent: running with no completed items is a no-op.
+
+#### `sync all` (default when no argument)
+
+Run both `sync sessions` and `sync todos`. This is what the pi `obs-memory` extension invokes automatically after every recap.
 
 ### `project` — Scaffold New Project
 

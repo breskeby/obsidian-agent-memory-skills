@@ -108,7 +108,36 @@ def sort_key(note: SessionNote):
     return (note.created, note.path.stem)
 
 
-def scan_sessions(vault: Path) -> list[SessionNote]:
+def backfill_summary(path: Path, text: str, frontmatter: dict[str, str], body: str, summary: str) -> None:
+    """Persist a derived summary back into the session note's frontmatter.
+
+    No-op if `summary:` already has a non-empty value. This is what keeps the
+    Dataview block useful in Obsidian: the LLM often forgets to fill `summary`
+    when writing the recap, so we infer it from the first heading and write it
+    back so future runs (and the user) see a stable label.
+    """
+    existing = unquote(frontmatter.get("summary", "")).strip()
+    if existing or not summary:
+        return
+    fm_match = FRONTMATTER_RE.match(text)
+    if not fm_match:
+        return
+    fm_raw = fm_match.group(1)
+    # Replace empty `summary:` line if present; otherwise inject before closing `---`.
+    safe = summary.replace('"', '\\"')
+    new_line = f'summary: "{safe}"'
+    if re.search(r"^summary:\s*$", fm_raw, re.M):
+        new_fm = re.sub(r"^summary:\s*$", new_line, fm_raw, count=1, flags=re.M)
+    elif re.search(r"^summary:", fm_raw, re.M):
+        # Has a value already (e.g. summary: "") — leave alone to avoid clobbering
+        return
+    else:
+        new_fm = fm_raw.rstrip() + "\n" + new_line
+    new_text = f"---\n{new_fm}\n---\n" + body
+    path.write_text(new_text, encoding="utf-8")
+
+
+def scan_sessions(vault: Path, backfill: bool = True) -> list[SessionNote]:
     sessions_dir = vault / "sessions"
     notes: list[SessionNote] = []
     for path in sorted(sessions_dir.glob("*.md")):
@@ -116,13 +145,16 @@ def scan_sessions(vault: Path) -> list[SessionNote]:
             continue
         text = path.read_text(encoding="utf-8")
         frontmatter, body = parse_frontmatter(text)
+        summary = derive_summary(frontmatter, body, path.stem)
+        if backfill:
+            backfill_summary(path, text, frontmatter, body, summary)
         notes.append(
             SessionNote(
                 path=path,
                 created=unquote(frontmatter.get("created", "")).strip(),
                 project=first_project(frontmatter),
                 branch=unquote(frontmatter.get("branch", "")).strip(),
-                summary=derive_summary(frontmatter, body, path.stem),
+                summary=summary,
                 title=path.stem,
             )
         )
@@ -165,10 +197,10 @@ def render_session_log(notes: list[SessionNote]) -> str:
     return "\n".join(lines)
 
 
-def sync_sessions(vault: Path) -> Path:
+def sync_sessions(vault: Path, backfill: bool = True) -> Path:
     sessions_dir = vault / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    notes = scan_sessions(vault)
+    notes = scan_sessions(vault, backfill=backfill)
     output = render_session_log(notes)
     target = sessions_dir / SESSION_LOG_NAME
     target.write_text(output, encoding="utf-8")
@@ -187,7 +219,7 @@ def main() -> int:
     if not (vault / "Home.md").exists():
         parser.error(f"Not an Obsidian agent-memory vault (missing Home.md): {vault}")
 
-    target = sync_sessions(vault)
+    target = sync_sessions(vault, backfill=True)
     print(f"Rebuilt {target}")
     return 0
 

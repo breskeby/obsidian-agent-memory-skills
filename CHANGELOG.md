@@ -2,6 +2,33 @@
 
 All notable changes to obs-memory are documented here.
 
+## [2.4.0] — 2026-06-18
+
+### Added
+
+- **`scripts/sync_todos.py`** — deterministic, idempotent archival of `[x]` items from `Active TODOs.md` to `Completed TODOs Archive.md`, grouped by `## {project}` heading and dated. Replaces the multi-step LLM-driven move in the `recap` procedure, which routinely missed items or duplicated headings.
+- **`sync_sessions.py` summary backfill** — when a session note has an empty `summary:`, the script now writes the first H1 of the body back into the frontmatter, so the Dataview-rendered Session Log always has a stable label even if the agent forgot to fill it.
+- **`/obs sync todos` and `/obs sync all`** — the `sync` subcommand now covers both derived indexes; `all` is the new default and runs both helpers.
+- **`/obs-finalize-recap` command** in the pi extension — manually re-runs both sync helpers; useful if the agent_end hook ever fails or you want to repair a vault.
+
+### Changed
+
+- **Pi `obs-memory` extension recap detection rewritten** — previously only fired when the user input literally contained `/obs recap`. Now:
+  - Matches a wider set of recap phrasings (`wrap up`, `write a session summary`, `recap`, etc.)
+  - Snapshots `sessions/*.md` mtimes before each turn and fires the sync helpers whenever a new or modified session note is detected at `agent_end`, even if no recap phrase was used. This catches sessions written via `/obs recap`, prompt templates, or other extensions uniformly.
+  - Always runs both `sync_sessions.py` and `sync_todos.py` after a recap signal, with per-target error reporting so a partial failure is visible instead of silent.
+- **`SKILL.md recap` procedure simplified** — step 5 (TODO update) now only asks the agent to mark items `[x]` and add new ones; the archival move is delegated to `sync_todos.py`. Step 6 invokes both helpers explicitly and notes that the pi extension runs them automatically.
+
+### Fixed
+
+- Session Log rows could end up blank when the agent forgot to fill `summary:` — backfill now guarantees a useful label.
+- Completed `[x]` items could accumulate in `Active TODOs.md` indefinitely when the agent skipped the archival step — the helper now removes them deterministically on every recap.
+
+### Tests
+
+- `tests/test_sync_todos.py` — grouping by project heading, archive auto-creation, idempotency, `Uncategorized` fallback when no H2 precedes a completed item.
+- `tests/test_sync_sessions.py` — new cases for summary backfill and not clobbering existing summaries.
+
 ## [2.3.0] — 2026-06-15
 
 ### Added

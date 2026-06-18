@@ -2,27 +2,43 @@
  * obs-memory Pi Extension
  *
  * Provides proactive skill support for Pi — equivalent to what Claude Code
- * achieves via plugin.json always loading the skill into the system prompt.
+ * achieves via plugin.json always loading the skill into the system prompt —
+ * plus deterministic post-recap hygiene so the session log and TODO archive
+ * never drift from the source-of-truth notes.
  *
- * In Claude Code, the obs-memory skill is always present in the system prompt,
- * so the agent automatically follows the "Session Start — Orientation" procedure
- * on every new session without being asked. Pi's skill system uses progressive
- * disclosure instead (description always present, full content on-demand), so
- * the session-start orientation never fires automatically.
+ * Lifecycle:
+ *   - before_agent_start (new session): inject full SKILL.md so the agent
+ *     follows the Session Start — Orientation procedure.
+ *   - input: detect intent to recap (explicit `/obs recap`, plus heuristic
+ *     "wrap up" / "write a session summary" phrasings).
+ *   - agent_end: if recap was signalled OR a new session note file was created
+ *     during the turn, run the deterministic Python helpers to (1) backfill
+ *     summaries + rebuild `sessions/Session Log.md`, (2) archive completed
+ *     `[x]` TODOs to `Completed TODOs Archive.md`.
  *
- * This extension bridges that gap: on the first turn of each new session it
- * injects the full SKILL.md into the system prompt, triggering the orientation
- * procedure exactly as Claude Code does. It also provides concrete runtime
- * automation for session-log syncing after `/obs recap`.
+ * Why detect new session notes (not just `/obs recap`)?
+ *   - Users say "wrap up" instead of `/obs recap`.
+ *   - Other extensions / prompt templates may write the session note.
+ *   - Agent forgets to call the sync helper (the original failure mode).
+ *
+ * Both helpers are idempotent — running them when nothing changed is safe.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+const RECAP_PHRASES = [
+	/\/obs\s+recap\b/i,
+	/\bwrite\s+(?:a\s+)?(?:session\s+)?(?:summary|recap)\b/i,
+	/\b(?:session\s+)?recap\b/i,
+	/\bwrap(?:ping)?\s+up\b/i,
+	/\bsession\s+summary\b/i,
+];
 
 function isNewSession(ctx: any): boolean {
 	return !ctx.sessionManager
@@ -73,48 +89,133 @@ function resolveSkillRoot(skillPath?: string): string | null {
 	return dirname(dirname(dirname(skillPath)));
 }
 
-async function runSessionSync(skillRoot: string, vault: string) {
-	const script = resolve(skillRoot, "scripts", "sync_sessions.py");
-	if (!existsSync(script)) {
-		throw new Error(`sync helper not found: ${script}`);
+interface SessionSnapshot {
+	files: Map<string, number>; // filename -> mtime
+}
+
+function snapshotSessions(vault: string): SessionSnapshot {
+	const dir = join(vault, "sessions");
+	const files = new Map<string, number>();
+	try {
+		for (const name of readdirSync(dir)) {
+			if (!name.endsWith(".md")) continue;
+			if (name === "Session Log.md") continue;
+			try {
+				files.set(name, statSync(join(dir, name)).mtimeMs);
+			} catch {
+				// ignore individual stat errors
+			}
+		}
+	} catch {
+		// sessions dir may not exist yet
 	}
-	await execFileAsync("python3", [script, vault, "sessions"]);
+	return { files };
+}
+
+function snapshotChanged(before: SessionSnapshot, after: SessionSnapshot): boolean {
+	if (after.files.size !== before.files.size) return true;
+	for (const [name, mtime] of after.files) {
+		const prev = before.files.get(name);
+		if (prev === undefined || prev !== mtime) return true;
+	}
+	return false;
+}
+
+async function runHelper(skillRoot: string, vault: string, target: "sessions" | "todos") {
+	const scriptName = target === "sessions" ? "sync_sessions.py" : "sync_todos.py";
+	const script = resolve(skillRoot, "scripts", scriptName);
+	if (!existsSync(script)) {
+		throw new Error(`${scriptName} not found at ${script}`);
+	}
+	const { stdout } = await execFileAsync("python3", [script, vault, target]);
+	return stdout.trim();
 }
 
 export default function (pi: ExtensionAPI) {
 	let orientationDone = false;
-	let pendingRecapSync = false;
+	let recapSignalled = false;
+	let preRunSnapshot: SessionSnapshot | undefined;
 	let obsSkillPath: string | undefined;
 	let resolvedVaultPath: string | undefined;
 
 	pi.on("session_start", () => {
 		orientationDone = false;
-		pendingRecapSync = false;
+		recapSignalled = false;
+		preRunSnapshot = undefined;
 	});
+
+	function ensureVault(ctx: any): string {
+		return (
+			resolvedVaultPath ||
+			resolveVaultPath(ctx?.getSystemPromptOptions?.().contextFiles)
+		);
+	}
+
+	async function runRecapFinalize(ctx: any, reason: string) {
+		const skillRoot = resolveSkillRoot(obsSkillPath);
+		const vault = ensureVault(ctx);
+		if (!skillRoot) {
+			ctx.ui?.notify?.(
+				"obs-memory: recap finished but skill root unknown; cannot run sync helpers",
+				"error",
+			);
+			return;
+		}
+
+		const results: string[] = [];
+		const errors: string[] = [];
+		for (const target of ["sessions", "todos"] as const) {
+			try {
+				const out = await runHelper(skillRoot, vault, target);
+				results.push(`${target}: ${out || "ok"}`);
+			} catch (error: any) {
+				errors.push(`${target}: ${error?.message || error}`);
+			}
+		}
+
+		if (errors.length === 0) {
+			ctx.ui?.notify?.(
+				`obs-memory finalized recap (${reason}): ${results.join(" · ")}`,
+				"info",
+			);
+		} else {
+			ctx.ui?.notify?.(
+				`obs-memory recap partial failure (${reason}): ${[...results, ...errors].join(" · ")}`,
+				"error",
+			);
+		}
+	}
 
 	pi.registerCommand("obs-sync-sessions", {
 		description: "Rebuild sessions/Session Log.md from session notes",
 		handler: async (_args, ctx) => {
 			const skillRoot = resolveSkillRoot(obsSkillPath);
-			const vault = resolvedVaultPath ||
-				resolveVaultPath(ctx.getSystemPromptOptions?.().contextFiles);
+			const vault = ensureVault(ctx);
 			if (!skillRoot) {
 				ctx.ui.notify("obs-memory skill path not available; cannot locate sync helper", "error");
 				return;
 			}
 			try {
-				await runSessionSync(skillRoot, vault);
-				ctx.ui.notify(`Session log synced: ${vault}/sessions/Session Log.md`, "info");
+				const out = await runHelper(skillRoot, vault, "sessions");
+				ctx.ui.notify(`Session log synced (${out || "ok"})`, "info");
 			} catch (error: any) {
 				ctx.ui.notify(`Session log sync failed: ${error?.message || error}`, "error");
 			}
 		},
 	});
 
+	pi.registerCommand("obs-finalize-recap", {
+		description:
+			"Run all post-recap hygiene (session log + completed TODO archival) explicitly",
+		handler: async (_args, ctx) => {
+			await runRecapFinalize(ctx, "manual");
+		},
+	});
+
 	pi.on("input", async (event) => {
 		const text = event.text.trim();
-		if (text === "/obs recap" || text.startsWith("/obs recap ")) {
-			pendingRecapSync = true;
+		if (RECAP_PHRASES.some((re) => re.test(text))) {
+			recapSignalled = true;
 		}
 		return { action: "continue" as const };
 	});
@@ -125,6 +226,10 @@ export default function (pi: ExtensionAPI) {
 		);
 		obsSkillPath = obsSkill?.filePath;
 		resolvedVaultPath = resolveVaultPath(event.systemPromptOptions?.contextFiles);
+
+		// Capture pre-run state so agent_end can detect newly-written session notes,
+		// even if the recap was triggered without an explicit `/obs recap`.
+		preRunSnapshot = snapshotSessions(resolvedVaultPath);
 
 		if (orientationDone) return;
 		orientationDone = true;
@@ -145,21 +250,21 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!pendingRecapSync) return;
-		pendingRecapSync = false;
+		const vault = ensureVault(ctx);
+		const after = snapshotSessions(vault);
+		const sessionsChanged =
+			preRunSnapshot !== undefined && snapshotChanged(preRunSnapshot, after);
+		preRunSnapshot = after;
 
-		const skillRoot = resolveSkillRoot(obsSkillPath);
-		const vault = resolvedVaultPath || resolveVaultPath();
-		if (!skillRoot) {
-			ctx.ui.notify("obs-memory recap finished, but sync helper could not be located", "error");
-			return;
-		}
+		if (!recapSignalled && !sessionsChanged) return;
 
-		try {
-			await runSessionSync(skillRoot, vault);
-			ctx.ui.notify(`Auto-synced session log after /obs recap`, "info");
-		} catch (error: any) {
-			ctx.ui.notify(`Auto-sync after /obs recap failed: ${error?.message || error}`, "error");
-		}
+		const reason = recapSignalled
+			? sessionsChanged
+				? "phrase + new note"
+				: "phrase"
+			: "new session note detected";
+		recapSignalled = false;
+
+		await runRecapFinalize(ctx, reason);
 	});
 }
